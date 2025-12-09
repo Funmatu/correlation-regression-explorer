@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>相関係数 vs 回帰モデリング 比較シミュレーター</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
+    
+    <!-- MathJax Setup for LaTeX rendering -->
+    <script>
+        MathJax = {
+            tex: {
+                inlineMath: [['$', '$'], ['\\(', '\\)']]
+            }
+        };
+    </script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+
+    <style>
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6; }
+        .card { background-color: white; border-radius: 0.75rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); padding: 1.5rem; }
+        .metric-box { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 1rem; border-radius: 0.5rem; color: white; transition: all 0.3s; }
+        .metric-value { font-size: 1.5rem; font-weight: bold; }
+        .metric-label { font-size: 0.875rem; opacity: 0.9; text-align: center; }
+        
+        /* 指標ごとの色分け */
+        .bg-pearson { background-color: #3b82f6; } /* Blue */
+        .bg-spearman { background-color: #06b6d4; } /* Cyan */
+        .bg-chatterjee { background-color: #8b5cf6; } /* Purple */
+        .bg-dcorr { background-color: #ec4899; } /* Pink */
+        .bg-model { background-color: #10b981; } /* Emerald (Green) */
+        
+        input[type=range] { width: 100%; }
+        
+        /* Disabled slider styling */
+        input[type=range]:disabled { opacity: 0.5; cursor: not-allowed; }
+        .disabled-text { color: #9ca3af; }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <div class="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
+        <!-- Header -->
+        <div class="col-span-1 lg:col-span-12 mb-4">
+            <h1 class="text-3xl font-bold text-gray-800">相関係数 vs 回帰モデリング</h1>
+            <p class="text-gray-600 mt-2">
+                Chatterjee係数 ($\xi_n$) と既存の相関係数、そして「モデル適合度 ($R^2$)」の違いを視覚的に比較します。<br>
+                <span class="text-sm text-gray-500">※ Chatterjee係数は $Y$ が $X$ の関数である度合いを測ります（非対称）。</span>
+            </p>
+        </div>
+
+        <!-- Controls -->
+        <div class="col-span-1 lg:col-span-3 space-y-4">
+            <div class="card space-y-6">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">データ形状 (Data Shape)</label>
+                    <select id="dataType" class="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500">
+                        <option value="linear">線形 (Linear)</option>
+                        <option value="quadratic" selected>2次関数 (Quadratic / U-shape)</option>
+                        <option value="cubic">3次関数 (Cubic)</option>
+                        <option value="sine">正弦波 (Sine Wave)</option>
+                        <option value="circle">円形 (Circle / Unfunctional)</option>
+                        <option value="step">階段状 (Step Function)</option>
+                        <option value="heteroscedastic">分散不均一 (Heteroscedastic)</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">ノイズレベル (Noise)</label>
+                    <input type="range" id="noiseLevel" min="0" max="2" step="0.1" value="0.3">
+                    <div class="flex justify-between text-xs text-gray-500">
+                        <span>Low</span>
+                        <span>High</span>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">サンプル数 (N)</label>
+                    <input type="range" id="sampleSize" min="50" max="1000" step="50" value="300">
+                    <div class="text-right text-xs text-gray-500"><span id="sampleSizeVal">300</span> points</div>
+                </div>
+                
+                <hr class="border-gray-200">
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">比較モデル (Comparison Model)</label>
+                    <select id="modelType" class="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500">
+                        <option value="linear_reg">単回帰 (Linear Regression)</option>
+                        <option value="poly_reg">多項式回帰 (Polynomial Regression)</option>
+                        <option value="tree" selected>決定木 (Overfitting Risk)</option>
+                    </select>
+                </div>
+
+                <!-- Polynomial Degree Slider (Conditionary Visible/Active) -->
+                <div id="polyControls" class="transition-opacity duration-300 opacity-50">
+                    <label id="polyLabel" class="block text-sm font-medium text-gray-400 mb-2">多項式の次数 (Degree): <span id="polyDegreeVal">2</span></label>
+                    <input type="range" id="polyDegree" min="1" max="15" step="1" value="2" disabled>
+                    <p class="text-xs text-gray-400 mt-1">※次数を上げすぎると過学習し、線が暴れます。</p>
+                </div>
+
+                <button id="regenerateBtn" class="w-full bg-gray-800 text-white py-2 px-4 rounded-md hover:bg-gray-700 transition">データを再生成</button>
+            </div>
+
+            <!-- Explanation Panel -->
+            <div class="card bg-blue-50 border-l-4 border-blue-500">
+                <h3 class="font-bold text-blue-800 text-sm">インサイト (Insights)</h3>
+                <ul class="list-disc list-inside text-xs text-blue-700 mt-2 space-y-2">
+                    <li><b>円形 (Circle):</b> $Y$は$X$の関数ではないためChatterjee係数は理論上低くなります。位相構造を捉える<b>距離相関</b>が最も強く反応します。</li>
+                    <li><b>過学習の実験:</b> 「多項式回帰」を選択し、次数を10以上に上げてください。$R^2$は上がりますが、グラフの端やデータ点の間で線が異常に振動します（ルンゲ現象的挙動）。</li>
+                    <li><b>決定木 (Tree):</b> 単一の決定木はノイズを「母集団の構造」として誤って学習（過学習）しがちです。実務ではGBDT等が好まれます。</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Main Visualization -->
+        <div class="col-span-1 lg:col-span-9 space-y-6">
+            
+            <!-- Plot -->
+            <div class="card h-96 relative p-0 overflow-hidden">
+                <div id="plotDiv" class="w-full h-full"></div>
+            </div>
+
+            <!-- Metrics Panel -->
+            <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+                <div class="metric-box bg-pearson">
+                    <span class="metric-value" id="val-pearson">--</span>
+                    <span class="metric-label">Pearson<br>(積率相関)</span>
+                </div>
+                <div class="metric-box bg-spearman">
+                    <span class="metric-value" id="val-spearman">--</span>
+                    <span class="metric-label">Spearman<br>(順位相関)</span>
+                </div>
+                <div class="metric-box bg-chatterjee relative overflow-hidden">
+                    <div class="absolute inset-0 bg-white opacity-10 transform -skew-x-12"></div>
+                    <span class="metric-value" id="val-chatterjee">--</span>
+                    <span class="metric-label">Chatterjee<br>($\xi_n$ Coefficient)</span>
+                </div>
+                <div class="metric-box bg-dcorr">
+                    <span class="metric-value" id="val-dcorr">--</span>
+                    <span class="metric-label">Distance Corr<br>(距離相関)</span>
+                </div>
+                <div class="metric-box bg-model border-2 border-green-600 shadow-lg scale-105 transform">
+                    <span class="metric-value" id="val-r2">--</span>
+                    <span class="metric-label">Model Fit<br>($R^2$ Score)</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Statistical Utility Functions ---
+
+        // Rank function
+        function getRanks(arr) {
+            const sorted = arr.slice().sort((a, b) => a - b);
+            return arr.map(v => sorted.indexOf(v) + 1);
+        }
+
+        // Pearson Correlation
+        function calculatePearson(x, y) {
+            const n = x.length;
+            if (n === 0) return 0;
+            const meanX = x.reduce((a, b) => a + b) / n;
+            const meanY = y.reduce((a, b) => a + b) / n;
+            let num = 0, denX = 0, denY = 0;
+            for (let i = 0; i < n; i++) {
+                const dx = x[i] - meanX;
+                const dy = y[i] - meanY;
+                num += dx * dy;
+                denX += dx * dx;
+                denY += dy * dy;
+            }
+            if (denX === 0 || denY === 0) return 0;
+            return num / Math.sqrt(denX * denY);
+        }
+
+        // Spearman Correlation
+        function calculateSpearman(x, y) {
+            const rankX = getRanks(x);
+            const rankY = getRanks(y);
+            return calculatePearson(rankX, rankY);
+        }
+
+        // Chatterjee's Xi Coefficient (The Star)
+        function calculateChatterjee(x, y) {
+            const n = x.length;
+            if (n < 2) return 0;
+
+            const combined = x.map((val, idx) => ({ x: val, y: y[idx] }));
+            combined.sort((a, b) => a.x - b.x);
+
+            const sortedYs = combined.map(item => item.y);
+            const ranks = getRanks(sortedYs);
+
+            let sumDiff = 0;
+            for (let i = 0; i < n - 1; i++) {
+                sumDiff += Math.abs(ranks[i+1] - ranks[i]);
+            }
+
+            return 1 - (3 * sumDiff) / (n * n - 1);
+        }
+
+        // Distance Correlation
+        function calculateDistanceCorrelation(x, y) {
+            const n = x.length;
+            if (n > 1000) return 0; 
+
+            const distMatrix = (arr) => {
+                const mat = [];
+                for(let i=0; i<n; i++) {
+                    mat[i] = [];
+                    for(let j=0; j<n; j++) {
+                        mat[i][j] = Math.abs(arr[i] - arr[j]);
+                    }
+                }
+                return mat;
+            };
+
+            const centerMatrix = (mat) => {
+                const rowMeans = mat.map(row => row.reduce((a,b)=>a+b,0)/n);
+                const colMeans = [];
+                for(let j=0; j<n; j++) {
+                    let sum = 0;
+                    for(let i=0; i<n; i++) sum += mat[i][j];
+                    colMeans[j] = sum/n;
+                }
+                const totalMean = rowMeans.reduce((a,b)=>a+b,0)/n;
+
+                const centered = [];
+                for(let i=0; i<n; i++) {
+                    centered[i] = [];
+                    for(let j=0; j<n; j++) {
+                        centered[i][j] = mat[i][j] - rowMeans[i] - colMeans[j] + totalMean;
+                    }
+                }
+                return centered;
+            };
+
+            const A = centerMatrix(distMatrix(x));
+            const B = centerMatrix(distMatrix(y));
+
+            let dCov2 = 0, dVarX2 = 0, dVarY2 = 0;
+            for(let i=0; i<n; i++) {
+                for(let j=0; j<n; j++) {
+                    dCov2 += A[i][j] * B[i][j];
+                    dVarX2 += A[i][j] * A[i][j];
+                    dVarY2 += B[i][j] * B[i][j];
+                }
+            }
+            
+            dCov2 /= (n*n);
+            dVarX2 /= (n*n);
+            dVarY2 /= (n*n);
+
+            if (dVarX2 === 0 || dVarY2 === 0) return 0;
+            return Math.sqrt(dCov2) / Math.sqrt(Math.sqrt(dVarX2) * Math.sqrt(dVarY2));
+        }
+
+        // --- Modeling Functions ---
+
+        // Matrix Solver (Gaussian Elimination) for Least Squares
+        function solveLinearSystem(A, b) {
+            const n = A.length;
+            // Augment Matrix
+            const M = A.map((row, i) => [...row, b[i]]);
+
+            // Forward Elimination
+            for (let i = 0; i < n; i++) {
+                // Pivot
+                let maxRow = i;
+                for (let k = i + 1; k < n; k++) {
+                    if (Math.abs(M[k][i]) > Math.abs(M[maxRow][i])) maxRow = k;
+                }
+                [M[i], M[maxRow]] = [M[maxRow], M[i]];
+
+                // Make pivot 1
+                const pivot = M[i][i];
+                if (Math.abs(pivot) < 1e-10) return null; // Singular
+                for (let j = i; j <= n; j++) M[i][j] /= pivot;
+
+                // Eliminate other rows
+                for (let k = 0; k < n; k++) {
+                    if (k !== i) {
+                        const factor = M[k][i];
+                        for (let j = i; j <= n; j++) M[k][j] -= factor * M[i][j];
+                    }
+                }
+            }
+
+            // Back Substitution (already diagonalized)
+            const result = new Array(n);
+            for (let i = 0; i < n; i++) result[i] = M[i][n];
+            return result;
+        }
+
+        // True Polynomial Regression (Least Squares)
+        function fitPolynomialRegression(x, y, degree = 2) {
+            const n = x.length;
+            const m = degree + 1; // Number of coefficients (c0, c1, c2...)
+            
+            // 1. Construct Matrix for Normal Equations: (X^T X) * Beta = X^T Y
+            
+            const A = Array.from({ length: m }, () => new Array(m).fill(0));
+            const b = new Array(m).fill(0);
+
+            // Precompute powers sums to avoid repeated loops
+            const powerSums = new Array(2 * m).fill(0);
+            for (let i = 0; i < n; i++) {
+                let val = 1;
+                for (let p = 0; p < 2 * m; p++) {
+                    powerSums[p] += val;
+                    val *= x[i];
+                }
+            }
+
+            // Fill A (X^T X)
+            for (let i = 0; i < m; i++) {
+                for (let j = 0; j < m; j++) {
+                    A[i][j] = powerSums[i + j];
+                }
+            }
+
+            // Fill b (X^T Y)
+            for (let i = 0; i < n; i++) {
+                let val = 1;
+                for (let k = 0; k < m; k++) {
+                    b[k] += y[i] * val;
+                    val *= x[i];
+                }
+            }
+
+            // 2. Solve for Coefficients
+            const coeffs = solveLinearSystem(A, b);
+            
+            // If singular or error, fallback to flat line (mean)
+            if (!coeffs) {
+                const meanY = y.reduce((acc, v) => acc + v, 0) / n;
+                return {
+                    sortedData: x.map(v => ({x: v, pred: meanY})).sort((a,b) => a.x - b.x),
+                    predictionsOriginalOrder: new Array(n).fill(meanY)
+                };
+            }
+
+            // 3. Generate Predictions
+            // y_pred = c0 + c1*x + c2*x^2 ...
+            const predictions = x.map(val => {
+                let pred = 0;
+                for (let k = 0; k < m; k++) {
+                    pred += coeffs[k] * Math.pow(val, k);
+                }
+                return pred;
+            });
+
+            // For plotting (sorted lines)
+            const sortedData = x.map((val, idx) => ({ x: val, pred: predictions[idx] }))
+                                .sort((a, b) => a.x - b.x);
+
+            return { sortedData, predictionsOriginalOrder: predictions };
+        }
+
+        function calculateR2(yTrue, yPred) {
+            const meanY = yTrue.reduce((a,b)=>a+b,0) / yTrue.length;
+            let ssRes = 0;
+            let ssTot = 0;
+            for(let i=0; i<yTrue.length; i++) {
+                ssRes += (yTrue[i] - yPred[i]) ** 2;
+                ssTot += (yTrue[i] - meanY) ** 2;
+            }
+            if(ssTot === 0) return 0;
+            return 1 - (ssRes / ssTot);
+        }
+
+        // Simple Decision Tree Regressor (Binning)
+        function fitDecisionTree(x, y, maxBins=15) {
+            const combined = x.map((val, idx) => ({ x: val, y: y[idx], originalIdx: idx }));
+            combined.sort((a, b) => a.x - b.x);
+            
+            const n = combined.length;
+            const binSize = Math.max(5, Math.floor(n / maxBins));
+            const predictions = new Array(n).fill(0);
+
+            for (let i = 0; i < n; i += binSize) {
+                const slice = combined.slice(i, Math.min(i + binSize, n));
+                const meanVal = slice.reduce((acc, curr) => acc + curr.y, 0) / slice.length;
+                slice.forEach(item => {
+                    predictions[item.originalIdx] = meanVal; 
+                });
+                slice.forEach(item => item.pred = meanVal);
+            }
+            
+            return {
+                sortedData: combined,
+                predictionsOriginalOrder: predictions
+            };
+        }
+
+        function fitLinearRegression(x, y) {
+            const n = x.length;
+            const meanX = x.reduce((a,b)=>a+b,0)/n;
+            const meanY = y.reduce((a,b)=>a+b,0)/n;
+            let num=0, den=0;
+            for(let i=0; i<n; i++){
+                num += (x[i]-meanX)*(y[i]-meanY);
+                den += (x[i]-meanX)**2;
+            }
+            const slope = den===0 ? 0 : num/den;
+            const intercept = meanY - slope*meanX;
+            const preds = x.map(val => slope*val + intercept);
+            
+            const sortedX = x.slice().sort((a,b)=>a-b);
+            const lineData = sortedX.map(val => ({x: val, pred: slope*val + intercept}));
+
+            return { sortedData: lineData, predictionsOriginalOrder: preds };
+        }
+        
+        // --- Main App Logic ---
+
+        const state = {
+            x: [],
+            y: [],
+            dataShape: 'quadratic',
+            noise: 0.3,
+            n: 300,
+            model: 'tree',
+            polyDegree: 2
+        };
+
+        function generateData() {
+            state.x = [];
+            state.y = [];
+            
+            for (let i = 0; i < state.n; i++) {
+                let xi = (Math.random() * 6) - 3; 
+                let yi = 0;
+                const noise = (Math.random() - 0.5) * state.noise * 5;
+
+                switch (state.dataShape) {
+                    case 'linear':
+                        yi = xi + noise;
+                        break;
+                    case 'quadratic':
+                        yi = xi * xi + noise;
+                        break;
+                    case 'cubic':
+                        yi = xi * xi * xi / 3 + noise;
+                        break;
+                    case 'sine':
+                        yi = Math.sin(xi * 2) + noise;
+                        break;
+                    case 'circle':
+                        const theta = Math.random() * Math.PI * 2;
+                        xi = Math.cos(theta) * 3 + (Math.random()-0.5)*state.noise;
+                        yi = Math.sin(theta) * 3 + (Math.random()-0.5)*state.noise;
+                        break;
+                    case 'step':
+                        yi = (xi > 0 ? 2 : -2) + noise;
+                        break;
+                    case 'heteroscedastic':
+                        yi = xi + (Math.random()-0.5) * Math.abs(xi) * state.noise * 5; 
+                        break;
+                }
+                state.x.push(xi);
+                state.y.push(yi);
+            }
+        }
+
+        function updateMetricsAndPlot() {
+            const p = calculatePearson(state.x, state.y);
+            const s = calculateSpearman(state.x, state.y);
+            const c = calculateChatterjee(state.x, state.y);
+            const d = calculateDistanceCorrelation(state.x, state.y);
+
+            document.getElementById('val-pearson').textContent = p.toFixed(3);
+            document.getElementById('val-spearman').textContent = s.toFixed(3);
+            document.getElementById('val-chatterjee').textContent = c.toFixed(3);
+            document.getElementById('val-dcorr').textContent = d.toFixed(3);
+
+            let modelRes;
+            if (state.model === 'tree') {
+                modelRes = fitDecisionTree(state.x, state.y);
+            } else if (state.model === 'linear_reg') {
+                modelRes = fitLinearRegression(state.x, state.y);
+            } else if (state.model === 'poly_reg') {
+                // Use the user-selected degree
+                modelRes = fitPolynomialRegression(state.x, state.y, state.polyDegree);
+            }
+
+            const r2 = calculateR2(state.y, modelRes.predictionsOriginalOrder);
+            document.getElementById('val-r2').textContent = r2.toFixed(3);
+
+            const tracePoints = {
+                x: state.x,
+                y: state.y,
+                mode: 'markers',
+                type: 'scatter',
+                name: 'Data',
+                marker: { color: '#3b82f6', size: 6, opacity: 0.6 }
+            };
+
+            const traceModel = {
+                x: modelRes.sortedData.map(d => d.x),
+                y: modelRes.sortedData.map(d => d.pred),
+                mode: 'lines',
+                type: 'scatter',
+                name: `Model (Deg=${state.model==='poly_reg'?state.polyDegree:'-'})`,
+                line: { color: '#10b981', width: 4 }
+            };
+
+            const layout = {
+                title: 'Data Distribution vs Model',
+                hovermode: 'closest',
+                showlegend: true,
+                margin: { t: 40, b: 40, l: 40, r: 20 },
+                xaxis: { title: 'X' },
+                yaxis: { title: 'Y' }
+            };
+
+            Plotly.newPlot('plotDiv', [tracePoints, traceModel], layout, {responsive: true, displayModeBar: false});
+        }
+
+        function togglePolyControls() {
+            const controls = document.getElementById('polyControls');
+            const slider = document.getElementById('polyDegree');
+            const label = document.getElementById('polyLabel');
+            
+            if (state.model === 'poly_reg') {
+                controls.classList.remove('opacity-50');
+                slider.disabled = false;
+                label.classList.remove('text-gray-400');
+                label.classList.add('text-gray-700');
+            } else {
+                controls.classList.add('opacity-50');
+                slider.disabled = true;
+                label.classList.remove('text-gray-700');
+                label.classList.add('text-gray-400');
+            }
+        }
+
+        document.getElementById('dataType').addEventListener('change', (e) => {
+            state.dataShape = e.target.value;
+            generateData();
+            updateMetricsAndPlot();
+        });
+
+        document.getElementById('noiseLevel').addEventListener('input', (e) => {
+            state.noise = parseFloat(e.target.value);
+            generateData();
+            updateMetricsAndPlot();
+        });
+
+        document.getElementById('sampleSize').addEventListener('input', (e) => {
+            state.n = parseInt(e.target.value);
+            document.getElementById('sampleSizeVal').textContent = state.n;
+            generateData();
+            updateMetricsAndPlot();
+        });
+
+        document.getElementById('modelType').addEventListener('change', (e) => {
+            state.model = e.target.value;
+            togglePolyControls();
+            updateMetricsAndPlot();
+        });
+
+        document.getElementById('polyDegree').addEventListener('input', (e) => {
+            state.polyDegree = parseInt(e.target.value);
+            document.getElementById('polyDegreeVal').textContent = state.polyDegree;
+            updateMetricsAndPlot();
+        });
+
+        document.getElementById('regenerateBtn').addEventListener('click', () => {
+            generateData();
+            updateMetricsAndPlot();
+        });
+
+        // Init
+        generateData();
+        togglePolyControls();
+        updateMetricsAndPlot();
+
+    </script>
+</body>
+</html>
